@@ -38,6 +38,8 @@ class ProvenanceRecord:
     normalized_value: Any = None
     norm_confidence: float = 0.0
     norm_note: str = ""
+    merge_confidence: Optional[float] = None
+    merge_reason: Optional[str] = None
 
 @dataclass
 class ExtraField:

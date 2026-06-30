@@ -2,7 +2,7 @@
   "ats_id": "ATS-8932",
   "candidate_name": "John Doe",
   "primary_email": "john.doe@example.com",
-  "phone_number": "+1-555-0244",
+  "phone_number": "+1 617-555-0244",
   "current_location": "Springfield",
   "profile_summary": "Experienced software engineer specializing in backend systems.",
   "experience_years": 8.5,

@@ -1,0 +1,169 @@
+[
+  {
+    "name": {
+      "value": "John Doe",
+      "confidence": 0.95
+    },
+    "emails": {
+      "value": [
+        "john.doe@example.com"
+      ],
+      "confidence": 0.95
+    },
+    "phones": {
+      "value": [
+        "+16175550244"
+      ],
+      "confidence": 0.95
+    },
+    "headline": {
+      "value": "Senior Python Architect at TechCorp",
+      "confidence": 0.4
+    },
+    "years_experience": {
+      "value": 8.5,
+      "confidence": 0.85
+    },
+    "skills": {
+      "value": [
+        "Python",
+        "SQL",
+        "Django",
+        "Git",
+        "Microservices",
+        "System Design"
+      ],
+      "confidence": 0.5
+    }
+  },
+  {
+    "name": {
+      "value": "John Smith",
+      "confidence": 0.95
+    },
+    "emails": {
+      "value": [
+        "john.smith.ats@example.com"
+      ],
+      "confidence": 0.95
+    },
+    "phones": {
+      "value": [
+        "+16175550300"
+      ],
+      "confidence": 0.95
+    },
+    "headline": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "years_experience": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "skills": {
+      "value": [
+        "Python",
+        "AWS"
+      ],
+      "confidence": 0.95
+    }
+  },
+  {
+    "name": {
+      "value": "Alice Webb",
+      "confidence": 0.95
+    },
+    "emails": {
+      "value": [
+        "alice.webb@example.com"
+      ],
+      "confidence": 0.95
+    },
+    "phones": {
+      "value": [
+        "+16175550777"
+      ],
+      "confidence": 0.95
+    },
+    "headline": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "years_experience": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "skills": {
+      "value": [
+        "React",
+        "TypeScript"
+      ],
+      "confidence": 0.95
+    }
+  },
+  {
+    "name": {
+      "value": "John Smith",
+      "confidence": 0.95
+    },
+    "emails": {
+      "value": [
+        "john.smith.notes@example.com"
+      ],
+      "confidence": 0.95
+    },
+    "phones": {
+      "value": [
+        "+16175550400"
+      ],
+      "confidence": 0.95
+    },
+    "headline": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "years_experience": {
+      "value": 10.0,
+      "confidence": 0.7
+    },
+    "skills": {
+      "value": [
+        "Java",
+        "Spring Boot",
+        "Microservices"
+      ],
+      "confidence": 0.95
+    }
+  },
+  {
+    "name": {
+      "value": null,
+      "confidence": 0.15
+    },
+    "emails": {
+      "value": [
+        "tie.candidate@example.com"
+      ],
+      "confidence": 0.95
+    },
+    "phones": {
+      "value": [
+        "+16175559999"
+      ],
+      "confidence": 0.95
+    },
+    "headline": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "years_experience": {
+      "value": null,
+      "confidence": 1.0
+    },
+    "skills": {
+      "value": null,
+      "confidence": 1.0
+    }
+  }
+]

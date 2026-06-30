@@ -2,7 +2,7 @@ Recruiter Candidate Notes
 =========================
 Candidate Name: John Smith
 Email: john.smith.notes@example.com
-Phone: +1-555-0400
+Phone: +1-617-555-0400
 Location: Seattle, WA
 Experience: 10 years of programming
 Skills: Java, Spring Boot, Microservices

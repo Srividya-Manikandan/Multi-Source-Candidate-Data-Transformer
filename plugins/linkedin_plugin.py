@@ -29,7 +29,7 @@ class LinkedInPlugin(BaseSourcePlugin):
                 "full_name": ("full_name", "A"),
                 "email_address": ("emails", "A"),
                 "phone": ("phones", "A"),
-                "geo_location": ("location", "C"),  # Fuzzy location match
+                "geo_location": ("location", "A"),  # Known schema field
                 "tagline": ("headline", "C"),       # Fuzzy headline match
                 "experience": ("experience", "A"),
                 "skills": ("skills", "A"),

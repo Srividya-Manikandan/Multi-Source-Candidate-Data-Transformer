@@ -6,7 +6,7 @@ from plugins.base import BaseSourcePlugin, RawCandidateField
 class ATSJsonPlugin(BaseSourcePlugin):
     def detect(self, source_path: str) -> bool:
         filename = os.path.basename(source_path).lower()
-        return filename.endswith('.json') and ('ats' in filename or 'profile' in filename)
+        return filename.endswith('.json') and ('ats' in filename or ('profile' in filename and 'linkedin' not in filename))
 
     def extract(self, source_path: str) -> List[RawCandidateField]:
         if not self.detect(source_path):

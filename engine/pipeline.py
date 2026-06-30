@@ -1,4 +1,5 @@
 import uuid
+import re
 from typing import List, Dict, Any, Tuple, Optional
 from models.candidate import Candidate, Location, Experience, Education, ProvenanceRecord, ExtraField
 from plugins.base import BaseSourcePlugin, RawCandidateField
@@ -56,11 +57,25 @@ class CandidateTransformerEngine:
         self.name_normalizer = NameNormalizer()
         self.location_normalizer = LocationNormalizer()
 
+        # Dynamic metrics tracking
+        self.raw_candidates_processed = 0
+        self.malformed_sources_skipped = 0
+        self.unresolved_conflicts_count = 0
+        self.unresolved_fields_list = []
+        self.malformed_sources = []
+
     def run_pipeline(self, file_paths: List[str]) -> List[Candidate]:
         """
         Runs the full candidate transformer pipeline on a list of input files:
         detect -> extract -> normalize -> resolve identity -> merge.
         """
+        # Re-initialize metrics for the run
+        self.raw_candidates_processed = 0
+        self.malformed_sources_skipped = 0
+        self.unresolved_conflicts_count = 0
+        self.unresolved_fields_list = []
+        self.malformed_sources = []
+
         # 1. Detect & Extract raw fields
         all_raw_fields: List[RawCandidateField] = []
         for path in file_paths:
@@ -68,12 +83,22 @@ class CandidateTransformerEngine:
             for plugin in self.plugins:
                 if plugin.detect(path):
                     plugin_found = True
-                    extracted = plugin.extract(path)
-                    if extracted:
-                        all_raw_fields.extend(extracted)
+                    try:
+                        extracted = plugin.extract(path)
+                        if extracted:
+                            all_raw_fields.extend(extracted)
+                        else:
+                            self.malformed_sources_skipped += 1
+                            self.malformed_sources.append(path)
+                    except Exception as e:
+                        print(f"Error parsing source {path}: {e}")
+                        self.malformed_sources_skipped += 1
+                        self.malformed_sources.append(path)
                     break
             if not plugin_found:
                 print(f"Warning: No plugin registered to parse source: {path}")
+                self.malformed_sources_skipped += 1
+                self.malformed_sources.append(path)
 
         if not all_raw_fields:
             return []
@@ -90,6 +115,8 @@ class CandidateTransformerEngine:
             if rid not in grouped_raw:
                 grouped_raw[rid] = []
             grouped_raw[rid].append(field)
+
+        self.raw_candidates_processed = len(grouped_raw)
 
         # Normalize and construct individual candidates
         individual_candidates: List[Candidate] = []
@@ -241,12 +268,20 @@ class CandidateTransformerEngine:
                             context["country"] = loc_norm["value"].country
 
                     norm = self.phone_normalizer.normalize(phone, context)
-                    if norm["value"] and norm["value"] not in candidate.phones:
-                        candidate.phones.append(norm["value"])
-                        candidate.provenance.append(ProvenanceRecord(
-                            source=source, field=target, raw_key=raw_key, raw_value=phone,
-                            normalized_value=norm["value"], evidence_tier=tier, confidence=evidence_conf,
-                            timestamp=tstamp, action="normalized", norm_confidence=norm["confidence"], norm_note=norm["note"]
+                    if norm["value"]:
+                        if norm["value"] not in candidate.phones:
+                            candidate.phones.append(norm["value"])
+                            candidate.provenance.append(ProvenanceRecord(
+                                source=source, field=target, raw_key=raw_key, raw_value=phone,
+                                normalized_value=norm["value"], evidence_tier=tier, confidence=evidence_conf,
+                                timestamp=tstamp, action="normalized", norm_confidence=norm["confidence"], norm_note=norm["note"]
+                            ))
+                    else:
+                        candidate.extra_fields.append(ExtraField(
+                            raw_key=raw_key,
+                            value=phone,
+                            source=source,
+                            reason=f"Invalid phone number: {norm['note']}"
                         ))
             elif target == "location":
                 norm = self.location_normalizer.normalize(raw_val, context)
@@ -461,13 +496,13 @@ class CandidateTransformerEngine:
 
         # Merge Array Fields (Union + Deduplicate)
         # emails, phones, skills, links
+        raw_phones = []
         for c in group:
             for em in c.emails:
                 if em not in base_cand.emails:
                     base_cand.emails.append(em)
             for ph in c.phones:
-                if ph not in base_cand.phones:
-                    base_cand.phones.append(ph)
+                raw_phones.append(ph)
             for sk in c.skills:
                 if sk not in base_cand.skills:
                     base_cand.skills.append(sk)
@@ -480,6 +515,13 @@ class CandidateTransformerEngine:
                 # Avoid duplicates
                 if not any(e.raw_key == ef.raw_key and e.value == ef.value and e.source == ef.source for e in base_cand.extra_fields):
                     base_cand.extra_fields.append(ef)
+
+        # Phone deduplication using exact equality
+        unique_phones = []
+        for phone in raw_phones:
+            if phone not in unique_phones:
+                unique_phones.append(phone)
+        base_cand.phones = unique_phones
 
         # Merge Single-Valued Fields
         # full_name, headline, years_experience, location
@@ -521,9 +563,66 @@ class CandidateTransformerEngine:
         if not candidates_values:
             return None
 
+        # Special logic for Location merging (Bug 3)
+        if field_name == "location":
+            locs_with_prov = [(val, prov) for val, prov in candidates_values if val is not None]
+            if locs_with_prov:
+                def locations_agree(loc1: Location, loc2: Location) -> bool:
+                    if not loc1 or not loc2:
+                        return True
+                    if loc1.city and loc2.city:
+                        if fuzzy_string_match(loc1.city, loc2.city) < 0.85:
+                            return False
+                    if loc1.state and loc2.state:
+                        if fuzzy_string_match(loc1.state, loc2.state) < 0.85:
+                            return False
+                    if loc1.country and loc2.country:
+                        if loc1.country.upper() != loc2.country.upper():
+                            return False
+                    return True
+
+                def merge_locations(locs: List[Location]) -> Location:
+                    if not locs:
+                        return None
+                    merged = Location(
+                        raw=locs[0].raw,
+                        city=locs[0].city,
+                        state=locs[0].state,
+                        country=locs[0].country
+                    )
+                    for loc in locs[1:]:
+                        if not loc:
+                            continue
+                        if not merged.city and loc.city:
+                            merged.city = loc.city
+                        if not merged.state and loc.state:
+                            merged.state = loc.state
+                        if not merged.country and loc.country:
+                            merged.country = loc.country
+                        if loc.raw and len(loc.raw) > len(merged.raw):
+                            merged.raw = loc.raw
+                    return merged
+
+                all_agree = True
+                for i in range(len(locs_with_prov)):
+                    for j in range(i + 1, len(locs_with_prov)):
+                        if not locations_agree(locs_with_prov[i][0], locs_with_prov[j][0]):
+                            all_agree = False
+                            break
+                    if not all_agree:
+                        break
+
+                if all_agree:
+                    merged_loc = merge_locations([item[0] for item in locs_with_prov])
+                    new_candidates_values = []
+                    for val, prov in candidates_values:
+                        if val is not None:
+                            new_candidates_values.append((merged_loc, prov))
+                        else:
+                            new_candidates_values.append((None, prov))
+                    candidates_values = new_candidates_values
+
         # Sort values based on priority rules
-        # Tuple sort: (tier_rank, timestamp, norm_confidence)
-        # Python sorts ascending, so we use negative/inversions for highest first
         def priority_key(item: Tuple[Any, ProvenanceRecord]) -> Tuple[int, float, float]:
             val, prov = item
             tr = tier_ranks.get(prov.evidence_tier, 0)
@@ -531,15 +630,106 @@ class CandidateTransformerEngine:
 
         candidates_values.sort(key=priority_key, reverse=True)
         
+        # Check for unresolved conflict tie (highest priority tie)
+        first_key = priority_key(candidates_values[0])
+        highest_priority_items = [item for item in candidates_values if priority_key(item) == first_key]
+        
+        distinct_tied_values = []
+        for val, prov in highest_priority_items:
+            val_str = str(val).strip().lower() if val else ""
+            if val_str and val_str not in distinct_tied_values:
+                distinct_tied_values.append(val_str)
+                
+        if len(highest_priority_items) > 1:
+            # Unresolved conflict triggered!
+            fixed_confidence = 0.15
+            tied_provs = [item[1] for item in highest_priority_items]
+            
+            # Update all tied provenance records
+            for val, prov in highest_priority_items:
+                prov.action = "tied"
+                prov.confidence = fixed_confidence
+                prov.reason = (
+                    "Unresolved conflict: evidence tier, timestamp and post-normalization "
+                    "confidence were identical across multiple sources. No deterministic winner exists. "
+                    "Canonical value set to null."
+                )
+                
+            # Discard any lower priority values
+            for val, prov in candidates_values:
+                if prov not in tied_provs:
+                    prov.action = "discarded"
+                    prov.reason = "Superseded by unresolved conflict tie at higher priority."
+                    
+            # Increment unresolved conflict counters
+            self.unresolved_conflicts_count += 1
+            if field_name not in self.unresolved_fields_list:
+                self.unresolved_fields_list.append(field_name)
+                
+            return None
+
         winner_val, winner_prov = candidates_values[0]
 
+        # 1. Compile comparison trace of all contenders
+        comp_lines = []
+        for val, prov in candidates_values:
+            val_desc = f"Location(city='{val.city}', state='{val.state}', country='{val.country}')" if field_name == "location" and hasattr(val, "city") else f"'{val}'"
+            comp_lines.append(
+                f"- Source '{prov.source}': {val_desc} (Evidence Tier: {prov.evidence_tier}, Timestamp: {prov.timestamp}, Normalization Confidence: {prov.norm_confidence:.2f})"
+            )
+        comparison_block = "\n".join(comp_lines)
+
+        # 2. Determine resolution rule and winning reasoning
+        winner_explanation = ""
+        if len(candidates_values) == 1:
+            winner_explanation = f"Single source value was available from '{winner_prov.source}'."
+        else:
+            c1_val, c1_prov = candidates_values[0]
+            c2_val, c2_prov = candidates_values[1]
+            tr1 = tier_ranks.get(c1_prov.evidence_tier, 0)
+            tr2 = tier_ranks.get(c2_prov.evidence_tier, 0)
+            
+            if tr1 > tr2:
+                winner_explanation = f"Rule check: Evidence tier of '{c1_prov.source}' (Tier {c1_prov.evidence_tier}) is higher than '{c2_prov.source}' (Tier {c2_prov.evidence_tier})."
+            elif c1_prov.timestamp > c2_prov.timestamp:
+                winner_explanation = f"Rule check: Evidence tiers were identical. Timestamp of '{c1_prov.source}' ({c1_prov.timestamp}) is newer than '{c2_prov.source}' ({c2_prov.timestamp})."
+            elif c1_prov.norm_confidence > c2_prov.norm_confidence:
+                winner_explanation = f"Rule check: Evidence tiers and timestamps were identical. Post-normalization confidence of '{c1_prov.source}' ({c1_prov.norm_confidence:.2f}) is higher than '{c2_prov.source}' ({c2_prov.norm_confidence:.2f})."
+            else:
+                winner_explanation = f"Rule check: All prioritized signals (tier, timestamp, confidence) were identical. Defaulted to the first source ('{c1_prov.source}') as winner."
+
+        detailed_reason = (
+            f"Compared {len(candidates_values)} value(s) for field '{field_name}':\n"
+            f"{comparison_block}\n"
+            f"{winner_explanation}\n"
+            f"Winner selected: '{winner_val}' from '{winner_prov.source}'."
+        )
+
+        # Check for location merge enrichment
+        added_notes = []
+        if field_name == "location" and 'merged_loc' in locals() and all_agree and merged_loc:
+            orig_loc = winner_prov.normalized_value
+            if orig_loc:
+                if not orig_loc.city and merged_loc.city:
+                    src = next((p.source for val, p in locs_with_prov if val and val.city == merged_loc.city), "corroborating")
+                    added_notes.append(f"city='{merged_loc.city}' from corroborating {src} source")
+                if not orig_loc.state and merged_loc.state:
+                    src = next((p.source for val, p in locs_with_prov if val and val.state == merged_loc.state), "corroborating")
+                    added_notes.append(f"state='{merged_loc.state}' from corroborating {src} source")
+                if not orig_loc.country and merged_loc.country:
+                    src = next((p.source for val, p in locs_with_prov if val and val.country == merged_loc.country), "corroborating")
+                    added_notes.append(f"country='{merged_loc.country}' from corroborating {src} source")
+                
+                if added_notes:
+                    winner_prov.merge_reason = "Merge enrichment: Added " + " and ".join(added_notes) + "."
+                    winner_prov.merge_confidence = max(p.confidence for val, p in locs_with_prov)
+                    detailed_reason += f"\nComplementary location enrichment: Added {', '.join(added_notes)}."
+
         # Check for disagreement across sources
-        # Disagreement is when a different source has a different normalized value
         disagreement = False
         distinct_values = []
         
         for val, prov in candidates_values:
-            # We compare string representations or exact objects
             val_str = str(val).strip().lower() if val else ""
             if val_str and val_str not in distinct_values:
                 distinct_values.append(val_str)
@@ -547,39 +737,37 @@ class CandidateTransformerEngine:
         if len(distinct_values) > 1:
             disagreement = True
 
-        # Handle losers
-        for val, prov in candidates_values[1:]:
-            prov.action = "discarded"
-            prov.reason = f"Superseded by value '{winner_val}' from '{winner_prov.source}' due to higher priority."
-
-        # Mark winner
-        winner_prov.action = "merged"
-
-        # Apply conflict penalty and weak signal promotion
+        # Apply conflict penalty and weak signal promotion to the winner record
         if disagreement:
-            # Conflict penalty: reduce evidence confidence by 0.10
             penalty = 0.10
             old_conf = winner_prov.confidence
             new_conf = max(0.0, old_conf - penalty)
             winner_prov.confidence = new_conf
-            winner_prov.reason = f"Conflict penalty applied: reduced confidence from {old_conf:.2f} to {new_conf:.2f} due to disagreeing source values."
+            penalty_msg = f"Conflict penalty applied (-0.10): confidence reduced from {old_conf:.2f} to {new_conf:.2f} due to conflicting values {distinct_values} across sources."
+            detailed_reason += f"\n{penalty_msg}"
         else:
-            # Check for weak signal promotion if multiple independent sources agree on the same value
             unique_sources = set(item[1].source for item in candidates_values if str(item[0]).strip().lower() == str(winner_val).strip().lower())
             if len(unique_sources) > 1:
-                # Agreeing signals promote confidence using probabilistic union formula:
-                # c_new = c1 + c2 - c1 * c2
-                # We do this iteratively for all agreeing sources
                 curr_conf = winner_prov.confidence
                 agree_provs = [item[1] for item in candidates_values if str(item[0]).strip().lower() == str(winner_val).strip().lower() and item[1] != winner_prov]
                 for p in agree_provs:
                     other_conf = p.confidence
                     curr_conf = curr_conf + other_conf - (curr_conf * other_conf)
                 
-                promoted_conf = min(0.95, curr_conf)  # ceiling at 0.95
+                promoted_conf = min(0.95, curr_conf)
                 if promoted_conf > winner_prov.confidence:
-                    winner_prov.reason = f"Weak signal promotion: increased confidence from {winner_prov.confidence:.2f} to {promoted_conf:.2f} based on agreement from {len(unique_sources)} sources."
+                    promotion_msg = f"Weak signal promotion applied: confidence boosted from {winner_prov.confidence:.2f} to {promoted_conf:.2f} based on agreement across {len(unique_sources)} sources."
                     winner_prov.confidence = promoted_conf
+                    detailed_reason += f"\n{promotion_msg}"
+
+        # Assign action and detailed decision traces
+        winner_prov.action = "merged"
+        winner_prov.reason = detailed_reason
+
+        # Handle losers with explanation of why they were rejected
+        for val, prov in candidates_values[1:]:
+            prov.action = "discarded"
+            prov.reason = f"Superseded by value '{winner_val}' from '{winner_prov.source}' due to lower priority.\n\nDecision Details:\n{detailed_reason}"
 
         return winner_val
 

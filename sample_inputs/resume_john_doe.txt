@@ -1,5 +1,6 @@
 JOHN DOE
 Email: john.doe@example.com
+Phone: 6175550244
 Phone: 555-0244
 Location: Springfield
 

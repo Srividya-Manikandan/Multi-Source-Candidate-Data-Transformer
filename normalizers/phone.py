@@ -18,94 +18,85 @@ def load_phone_rules() -> dict:
 class PhoneNormalizer(BaseNormalizer):
     def normalize(self, raw: Any, context: Optional[Dict[str, Any]] = None) -> NormalizationResult:
         if not raw:
-            return {"value": "", "confidence": 0.0, "note": "Empty phone value."}
+            return {"value": None, "confidence": 0.0, "note": "Empty phone value."}
         
         raw_str = str(raw).strip()
         
         # Cleaned digits extraction
         digits_only = re.sub(r'\D', '', raw_str)
         if not digits_only:
-            return {"value": "", "confidence": 0.0, "note": "No digits found in phone number."}
+            return {"value": None, "confidence": 0.0, "note": "No digits found in phone number."}
 
-        # Determine country signal from location context
+        # Determine country code from context
         country_code = None
         if context and 'country' in context and context['country']:
             country_code = str(context['country']).upper()
 
-        # Priority 1: phonenumbers library validation
-        try:
-            import phonenumbers
-            parsed_phone = None
-            if country_code:
-                try:
-                    parsed_phone = phonenumbers.parse(raw_str, country_code)
-                except phonenumbers.NumberParseException:
-                    pass
-            
-            if not parsed_phone and raw_str.startswith('+'):
-                try:
-                    parsed_phone = phonenumbers.parse(raw_str, None)
-                except phonenumbers.NumberParseException:
-                    pass
-
-            if parsed_phone and phonenumbers.is_valid_number(parsed_phone):
-                formatted = phonenumbers.format_number(parsed_phone, phonenumbers.PhoneNumberFormat.E164)
-                return {
-                    "value": formatted,
-                    "confidence": 0.95,
-                    "note": f"Successfully parsed and formatted to E.164 via phonenumbers using country '{country_code or 'embedded'}'."
-                }
-        except ImportError:
-            pass
-
         # Load configurations
         phone_rules = load_phone_rules()
 
-        # Priority 2: Country signal exists, fallback to phone_rules.json validation
-        if country_code:
-            if country_code in phone_rules:
-                rule = phone_rules[country_code]
-                dial_code = str(rule["dialing_code"])
-                nat_len = int(rule["national_length"])
-                
-                # Check Case A: starts with dialing code and has length of dialing code + national length
-                if digits_only.startswith(dial_code) and len(digits_only) == len(dial_code) + nat_len:
-                    return {
-                        "value": f"+{digits_only}",
-                        "confidence": 0.80,
-                        "note": f"Fallback valid: Match dialing code '+{dial_code}' and national length {nat_len} for country '{country_code}'."
-                    }
-                # Check Case B: lacks dialing code but matches national length exactly
-                elif len(digits_only) == nat_len:
-                    return {
-                        "value": f"+{dial_code}{digits_only}",
-                        "confidence": 0.80,
-                        "note": f"Fallback valid: Prepended dialing code '+{dial_code}' for national length {nat_len} for country '{country_code}'."
-                    }
-                else:
-                    # Invalid numbers: failed country rules
-                    formatted_val = f"+{digits_only}" if raw_str.startswith('+') else digits_only
-                    return {
-                        "value": formatted_val,
-                        "confidence": 0.20,
-                        "note": f"Invalid number: Fails validation rules for country '{country_code}' (expected length {nat_len} or starts with dial code '{dial_code}')."
-                    }
-            else:
-                # Country signal exists but no rule configured
-                formatted_val = f"+{digits_only}" if raw_str.startswith('+') else digits_only
+        # If country code is not present, try to infer it from the dialing code prefix
+        if not country_code:
+            # Sort country rules by dialing code length descending to match longest dialing codes first
+            sorted_countries = sorted(phone_rules.items(), key=lambda x: len(x[1].get("dialing_code", "")), reverse=True)
+            for c_code, rule in sorted_countries:
+                dial_code = str(rule.get("dialing_code", ""))
+                if dial_code and digits_only.startswith(dial_code):
+                    nat_len = int(rule.get("national_length", 10))
+                    # Check if total length matches case A (with dial code) or case B (without)
+                    if len(digits_only) == nat_len + len(dial_code) or len(digits_only) == nat_len:
+                        country_code = c_code
+                        break
+            
+            # No default fallback: if undetected, return None
+            if not country_code:
                 return {
-                    "value": formatted_val,
-                    "confidence": 0.20,
-                    "note": f"Invalid number: Country rule for '{country_code}' is not configured in phone_rules.json."
+                    "value": None,
+                    "confidence": 0.0,
+                    "note": "No country signal available. Country not assumed."
                 }
 
-        # Priority 3: No country signal exists
-        # Keep only the cleaned digits, do not prepend country code, cap confidence.
-        # Check if it looks E.164 already (starts with + and has digits) to preserve leading + if appropriate,
-        # but do not invent/prepend country code.
-        formatted_val = digits_only
+        # Apply rule validation
+        if country_code in phone_rules:
+            rule = phone_rules[country_code]
+            dial_code = str(rule["dialing_code"])
+            nat_len = int(rule["national_length"])
+            min_d = int(rule["min_digits"])
+            max_d = int(rule["max_digits"])
+
+            total_digits = len(digits_only)
+
+            # 1. Check total digit limits
+            if not (min_d <= total_digits <= max_d):
+                return {
+                    "value": None,
+                    "confidence": 0.0,
+                    "note": f"Invalid {country_code} phone number. Expected total digits between {min_d} and {max_d} but received {total_digits}."
+                }
+
+            # 2. Check cases
+            is_case_a = (digits_only.startswith(dial_code) and total_digits == len(dial_code) + nat_len)
+            is_case_b = (total_digits == nat_len)
+
+            if not (is_case_a or is_case_b):
+                return {
+                    "value": None,
+                    "confidence": 0.0,
+                    "note": f"Invalid {country_code} phone number. Expected {nat_len} national digits but received {total_digits if not digits_only.startswith(dial_code) else total_digits - len(dial_code)}."
+                }
+
+            # Format to canonical E.164 value
+            canonical_value = f"+{digits_only}" if is_case_a else f"+{dial_code}{digits_only}"
+            return {
+                "value": canonical_value,
+                "confidence": 0.95 if raw_str.startswith('+') else 0.80,
+                "note": f"Successfully validated and formatted to E.164 for country '{country_code}'."
+            }
+
+        # If country rules not found, keep digits as-is with capped confidence
+        formatted_val = f"+{digits_only}" if raw_str.startswith('+') else digits_only
         return {
             "value": formatted_val,
             "confidence": 0.50,
-            "note": "No country signal and no phonenumbers validation. Digits kept as-is, confidence capped."
+            "note": "No country signal and no validation rules found. Digits kept as-is, confidence capped."
         }

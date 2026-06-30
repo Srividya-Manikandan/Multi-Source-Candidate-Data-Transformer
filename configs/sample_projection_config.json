@@ -1,10 +1,10 @@
 {
   "include_confidence": true,
-  "on_missing": "null",
+  "on_missing": "null", 
   "fields": [
     {
-      "path": "full_name",
-      "from_path": "name",
+      "path": "name",
+      "from_path": "full_name",
       "type": "string",
       "required": true
     },
