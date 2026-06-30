@@ -35,12 +35,16 @@ class ProvenanceRecord:
     timestamp: float
     action: str  # 'merged', 'discarded', 'normalized', etc.
     reason: Optional[str] = None
+    normalized_value: Any = None
+    norm_confidence: float = 0.0
+    norm_note: str = ""
 
 @dataclass
 class ExtraField:
     raw_key: str
     value: Any
     source: str
+    reason: Optional[str] = None
 
 @dataclass
 class Candidate:

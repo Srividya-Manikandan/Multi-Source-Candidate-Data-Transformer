@@ -8,6 +8,7 @@ class RawCandidateField(TypedDict):
     evidence_tier: str      # 'A', 'B', 'C', or 'D'
     source: str             # File path or source identifier
     timestamp: float        # Timestamp representing data recency (e.g. file modification time or embedded date)
+    record_id: str          # Identifies which candidate profile this field belongs to in the source file
 
 class BaseSourcePlugin(ABC):
     @abstractmethod
