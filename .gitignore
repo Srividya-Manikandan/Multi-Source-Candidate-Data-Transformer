@@ -27,5 +27,9 @@ dist/
 .coverage
 htmlcov/
 
+# Local generated outputs and scratchpads
+outputs/
+scratch/
+
 # Logs
 *.log
