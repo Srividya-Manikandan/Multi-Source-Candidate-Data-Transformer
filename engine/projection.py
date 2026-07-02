@@ -115,7 +115,7 @@ class ProjectionLayer:
 
             # Check if we should include confidence alongside the field
             if config.include_confidence:
-                confidence = prov.confidence if prov else 1.0
+                confidence = prov.merge_confidence if (prov and getattr(prov, 'merge_confidence', None) is not None) else (prov.confidence if prov else 1.0)
                 if target_name == "overall_confidence":
                     confidence = 1.0
                 output[target_name] = {

@@ -80,8 +80,8 @@ class TestCandidateTransformer(unittest.TestCase):
         # Verify merge enrichment reasons and confidence set on winner
         winner_prov = next(p for p in merged.provenance if p.action == "merged")
         self.assertIsNotNone(winner_prov.merge_reason)
-        self.assertIn("Merge enrichment", winner_prov.merge_reason)
-        self.assertEqual(winner_prov.merge_confidence, 0.95)
+        self.assertIn("inferred from complementary source", winner_prov.merge_reason)
+        self.assertAlmostEqual(winner_prov.merge_confidence, 0.80)
 
     def test_unresolved_tie_conflict(self):
         c1 = Candidate(candidate_id="C1")

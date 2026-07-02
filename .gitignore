@@ -30,6 +30,6 @@ htmlcov/
 # Local generated outputs and scratchpads
 outputs/
 scratch/
-
+docs/
 # Logs
 *.log

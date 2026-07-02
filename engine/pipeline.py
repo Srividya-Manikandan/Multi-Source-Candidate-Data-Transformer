@@ -564,22 +564,35 @@ class CandidateTransformerEngine:
             return None
 
         # Special logic for Location merging (Bug 3)
+        self.has_partial_merge = False
         if field_name == "location":
             locs_with_prov = [(val, prov) for val, prov in candidates_values if val is not None]
             if locs_with_prov:
-                def locations_agree(loc1: Location, loc2: Location) -> bool:
+                def get_location_match_type(loc1: Location, loc2: Location) -> str:
                     if not loc1 or not loc2:
-                        return True
+                        return "FULL"
                     if loc1.city and loc2.city:
                         if fuzzy_string_match(loc1.city, loc2.city) < 0.85:
-                            return False
+                            return "DISAGREE"
                     if loc1.state and loc2.state:
                         if fuzzy_string_match(loc1.state, loc2.state) < 0.85:
-                            return False
+                            return "DISAGREE"
                     if loc1.country and loc2.country:
                         if loc1.country.upper() != loc2.country.upper():
-                            return False
-                    return True
+                            return "DISAGREE"
+                    
+                    # Detect gaps (one has data the other lacks)
+                    has_gap = False
+                    if (loc1.city is None) != (loc2.city is None):
+                        has_gap = True
+                    if (loc1.state is None) != (loc2.state is None):
+                        has_gap = True
+                    if (loc1.country is None) != (loc2.country is None):
+                        has_gap = True
+                    
+                    if has_gap:
+                        return "PARTIAL"
+                    return "FULL"
 
                 def merge_locations(locs: List[Location]) -> Location:
                     if not locs:
@@ -606,9 +619,12 @@ class CandidateTransformerEngine:
                 all_agree = True
                 for i in range(len(locs_with_prov)):
                     for j in range(i + 1, len(locs_with_prov)):
-                        if not locations_agree(locs_with_prov[i][0], locs_with_prov[j][0]):
+                        m_type = get_location_match_type(locs_with_prov[i][0], locs_with_prov[j][0])
+                        if m_type == "DISAGREE":
                             all_agree = False
                             break
+                        elif m_type == "PARTIAL":
+                            self.has_partial_merge = True
                     if not all_agree:
                         break
 
@@ -640,7 +656,7 @@ class CandidateTransformerEngine:
             if val_str and val_str not in distinct_tied_values:
                 distinct_tied_values.append(val_str)
                 
-        if len(highest_priority_items) > 1:
+        if len(distinct_tied_values) > 1:
             # Unresolved conflict triggered!
             fixed_confidence = 0.15
             tied_provs = [item[1] for item in highest_priority_items]
@@ -696,7 +712,10 @@ class CandidateTransformerEngine:
             elif c1_prov.norm_confidence > c2_prov.norm_confidence:
                 winner_explanation = f"Rule check: Evidence tiers and timestamps were identical. Post-normalization confidence of '{c1_prov.source}' ({c1_prov.norm_confidence:.2f}) is higher than '{c2_prov.source}' ({c2_prov.norm_confidence:.2f})."
             else:
-                winner_explanation = f"Rule check: All prioritized signals (tier, timestamp, confidence) were identical. Defaulted to the first source ('{c1_prov.source}') as winner."
+                if 'distinct_tied_values' in locals() and len(distinct_tied_values) == 1:
+                    winner_explanation = f"Rule check: All prioritized signals (tier, timestamp, confidence) were identical across sources, and they agreed on the same value. First source ('{c1_prov.source}') selected as canonical winner."
+                else:
+                    winner_explanation = f"Rule check: All prioritized signals (tier, timestamp, confidence) were identical. Defaulted to the first source ('{c1_prov.source}') as winner."
 
         detailed_reason = (
             f"Compared {len(candidates_values)} value(s) for field '{field_name}':\n"
@@ -721,9 +740,16 @@ class CandidateTransformerEngine:
                     added_notes.append(f"country='{merged_loc.country}' from corroborating {src} source")
                 
                 if added_notes:
-                    winner_prov.merge_reason = "Merge enrichment: Added " + " and ".join(added_notes) + "."
-                    winner_prov.merge_confidence = max(p.confidence for val, p in locs_with_prov)
-                    detailed_reason += f"\nComplementary location enrichment: Added {', '.join(added_notes)}."
+                    max_conf = max(p.confidence for val, p in locs_with_prov)
+                    if self.has_partial_merge:
+                        reduced_conf = max(0.60, max_conf - 0.15)
+                        winner_prov.merge_reason = "state/country inferred from complementary source, not independently confirmed — same city name, unverified match"
+                        winner_prov.merge_confidence = reduced_conf
+                        detailed_reason += f"\nComplementary location enrichment: state/country inferred from complementary source, not independently confirmed — same city name, unverified match"
+                    else:
+                        winner_prov.merge_reason = "Merge enrichment: Added " + " and ".join(added_notes) + "."
+                        winner_prov.merge_confidence = max_conf
+                        detailed_reason += f"\nComplementary location enrichment: Added {', '.join(added_notes)}."
 
         # Check for disagreement across sources
         disagreement = False
